@@ -18,6 +18,9 @@
 
 package org.yawlfoundation.test;
 
+import org.apache.http.HttpResponse;
+import org.apache.http.concurrent.FutureCallback;
+import org.apache.http.util.EntityUtils;
 import org.jdom2.Element;
 import org.jdom2.JDOMException;
 import org.slf4j.Logger;
@@ -25,6 +28,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.actuate.metrics.Metric;
 import org.springframework.stereotype.Component;
 import org.yawlfoundation.yawl.elements.data.YParameter;
+import org.yawlfoundation.yawl.engine.interfce.Marshaller;
 import org.yawlfoundation.yawl.engine.interfce.WorkItemRecord;
 import org.yawlfoundation.yawl.engine.interfce.interfaceB.InterfaceBWebsideController;
 import org.yawlfoundation.yawl.engine.time.YTimer;
@@ -35,6 +39,7 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -72,9 +77,67 @@ public class TestService extends InterfaceBWebsideController {
         try {
 
             // connect only if not already connected
-            while (! connected()) _handle = connect("admin", "YAWL");
+            while (! connected()) _handle = connect("admin:1", "YAWL");
 
            final String handle=_handle;
+
+            _interfaceBClient.asyncHandleWorkItem(wir.getID(), _handle, new FutureCallback<HttpResponse>() {
+                @Override
+                public void completed(HttpResponse httpResponse) {
+                    try {
+                        //logger.info("aaa");
+                        String msg = EntityUtils.toString(httpResponse.getEntity());
+                        //result=_interfaceBClient.stripOuterElement(result);
+                        WorkItemRecord resultItem;
+                        if (successful(msg)) {
+                            msg = _interfaceBClient.stripOuterElement(msg);
+                            msg = _interfaceBClient.stripOuterElement(msg);
+                            resultItem = Marshaller.unmarshalWorkItem(msg);
+                            _ibCache.addWorkItem(resultItem);
+                        }
+                        else throw new RuntimeException(msg);
+
+                        String caseId=wir.getRootCaseID();
+
+                        int value=counts.get(caseId)==null?0:counts.get(caseId);
+                        counts.put(caseId, value + 1);
+                        if(last_task_timestamps.get(caseId)!=null){
+                            writer.set(new Metric<Number>("time_span",System.currentTimeMillis()-last_task_timestamps.get(caseId)));
+                        }
+
+                        logger.info(caseId);
+
+
+
+                        String data = counts.get(caseId) == 100 ? "Y" : "N";
+
+                        TimeUnit.MILLISECONDS.sleep(Math.abs(random.nextInt(100)));
+
+
+                        asyncCheckInWorkItem(resultItem.getID(),
+                                resultItem.getDataList(),
+                                getOutputData(resultItem.getTaskName(), data), null, handle);
+
+                        last_task_timestamps.put(caseId,System.currentTimeMillis());
+                    } catch (IOException | JDOMException | InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+                }
+
+                @Override
+                public void failed(Exception e) {
+                    logger.info(e.getMessage());
+                }
+
+                @Override
+                public void cancelled() {
+                    logger.info("cancel");
+                }
+            });
+
+
+
+            /*
             executor.execute(new Runnable() {
                 @Override
                 public void run() {
@@ -114,6 +177,7 @@ public class TestService extends InterfaceBWebsideController {
                     logger.info(String.format("caseId is %s, count is %d",caseId,value));
                 }
             });
+            */
 
         }
         catch (Exception ioe) {

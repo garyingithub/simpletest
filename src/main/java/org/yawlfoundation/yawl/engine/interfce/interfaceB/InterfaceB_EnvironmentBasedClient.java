@@ -18,6 +18,8 @@
 
 package org.yawlfoundation.yawl.engine.interfce.interfaceB;
 
+import org.apache.http.HttpResponse;
+import org.apache.http.concurrent.FutureCallback;
 import org.jdom2.Document;
 import org.jdom2.Element;
 import org.jdom2.JDOMException;
@@ -398,6 +400,12 @@ public class InterfaceB_EnvironmentBasedClient extends Interface_Client {
     }
 
 
+    public void asyncHandleWorkItem(String workItemID, String sessionHandle, FutureCallback<HttpResponse> callback) throws IOException {
+        Map<String, String> params = prepareParamMap("checkout", sessionHandle);
+        params.put("workItemID", workItemID);
+        asyncExecutePostWithCallback(_backEndURIStr, params,callback);
+    }
+
     /**
      * Rejects the announcement of an enabled work item to a service, and passes the
      * the work item back to the engine for processing by the default work list
@@ -497,6 +505,15 @@ public class InterfaceB_EnvironmentBasedClient extends Interface_Client {
         params.put("workItemID", workItemID);
         params.put("logPredicate", logPredicate);
         return executePost(_backEndURIStr, params);
+    }
+
+    public void asyncCheckInWorkItem(String workItemID, String data, String logPredicate, String sessionHandle)
+            throws IOException {
+        Map<String, String> params = prepareParamMap("checkin", sessionHandle);
+        params.put("data", data);
+        params.put("workItemID", workItemID);
+        params.put("logPredicate", logPredicate);
+        asyncExecutePost(_backEndURIStr, params);
     }
 
 

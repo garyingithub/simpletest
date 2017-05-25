@@ -126,7 +126,7 @@ public class InfluxDBGaugeWriter implements GaugeWriter {
 
 
 
-      
+
         buffer.add(new Record(TOPIC,tags,value,String.valueOf(metric.getTimestamp().getTime())));
 
 

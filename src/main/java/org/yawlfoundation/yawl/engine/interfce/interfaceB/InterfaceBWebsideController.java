@@ -408,6 +408,43 @@ public abstract class InterfaceBWebsideController {
         return result;
     }
 
+    public void asyncCheckInWorkItem(String workItemID, Element inputData,
+                                  Element outputData, String logPredicate, String sessionHandle)
+            throws IOException, JDOMException {
+
+        // first, get workitem record from local cache; if not there, check the engine
+        // for it; if not there, fail
+        WorkItemRecord workitem = getCachedWorkItem(workItemID);
+        if (workitem == null) workitem = getEngineStoredWorkItem(workItemID, sessionHandle);
+        if (workitem == null) {
+            throw new RuntimeException("<failure>Unknown workitem: '" + workItemID + "'.</failure>");
+        }
+
+        // merge the input and output data together
+        String mergedOutputData = Marshaller.getMergedOutputData(inputData, outputData);
+        String filteredOutputData;
+
+        // Now if this is beta4 or greater then remove all those input only bits of data
+        // by first preparing a list of output params to iterate over.
+        YSpecificationID specID = new YSpecificationID(workitem);
+        SpecificationData specData = getSpecificationData(specID, sessionHandle);
+        if (! specData.usesSimpleRootData()) {
+            TaskInformation taskInfo = getTaskInformation(specID, workitem.getTaskID(),
+                    sessionHandle);
+            List<YParameter> outputParams = taskInfo.getParamSchema().getOutputParams();
+            filteredOutputData = Marshaller.filterDataAgainstOutputParams(
+                    mergedOutputData, outputParams);
+        }
+        else {
+            filteredOutputData = mergedOutputData;
+        }
+
+        _interfaceBClient.asyncCheckInWorkItem(workItemID, filteredOutputData,
+                logPredicate, sessionHandle);
+        _ibCache.removeRemotelyCachedWorkItem(workItemID);
+        //return result;
+    }
+
 
     /**
      * Gets a locally stored copy of a work item.

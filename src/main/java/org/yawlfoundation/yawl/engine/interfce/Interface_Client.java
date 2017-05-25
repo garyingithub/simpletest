@@ -1,42 +1,52 @@
 /*
-* Copyright (c) 2004-2012 The YAWL Foundation. All rights reserved.
-* The YAWL Foundation is a collaboration of individuals and
-* organisations who are committed to improving workflow technology.
-*
-* This file is part of YAWL. YAWL is free software: you can
-* redistribute it and/or modify it under the terms of the GNU Lesser
-* General Public License as published by the Free Software Foundation.
-*
-* YAWL is distributed in the hope that it will be useful, but WITHOUT
-* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
-* or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser General
-* Public License for more details.
-*
-* You should have received a copy of the GNU Lesser General Public
-* License along with YAWL. If not, see <http://www.gnu.org/licenses/>.
-*/
+ * Copyright (c) 2004-2012 The YAWL Foundation. All rights reserved.
+ * The YAWL Foundation is a collaboration of individuals and
+ * organisations who are committed to improving workflow technology.
+ *
+ * This file is part of YAWL. YAWL is free software: you can
+ * redistribute it and/or modify it under the terms of the GNU Lesser
+ * General Public License as published by the Free Software Foundation.
+ *
+ * YAWL is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+ * or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with YAWL. If not, see <http://www.gnu.org/licenses/>.
+ */
 
 package org.yawlfoundation.yawl.engine.interfce;
 
+import org.apache.http.HttpResponse;
 import org.apache.http.NameValuePair;
 import org.apache.http.client.entity.UrlEncodedFormEntity;
 import org.apache.http.client.methods.CloseableHttpResponse;
-import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPost;
+import org.apache.http.concurrent.FutureCallback;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
+import org.apache.http.impl.nio.client.CloseableHttpAsyncClient;
+import org.apache.http.impl.nio.client.HttpAsyncClients;
 import org.apache.http.message.BasicNameValuePair;
 import org.apache.http.protocol.BasicHttpContext;
 import org.apache.http.protocol.HttpContext;
 import org.apache.http.util.EntityUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.*;
 import java.net.HttpURLConnection;
+import java.net.InetAddress;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.Future;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * This class is used by clients and servers to execute GET and POST requests
@@ -68,6 +78,28 @@ public class Interface_Client {
             throws IOException {
 
         return send(urlStr, paramsMap, true);
+    }
+
+    protected void asyncExecutePost(String urlStr, Map<String, String> paramsMap)
+            throws IOException {
+
+        asyncSend(urlStr, paramsMap, true);
+    }
+
+    protected void asyncExecutePostWithCallback(String urlStr, Map<String, String> paramsMap,FutureCallback<HttpResponse> callback)
+            throws IOException {
+
+        asyncSendWithCallback(urlStr, paramsMap, true,callback);
+    }
+
+
+    public String send(String urlStr,String data) throws IOException {
+        HttpURLConnection connection=initPostConnection(urlStr);
+        sendData(connection,data);
+        String result=getReply(connection.getInputStream());
+        connection.disconnect();
+
+        return result;
     }
 
 
@@ -115,7 +147,7 @@ public class Interface_Client {
      * @param xml the xml string to strip
      * @return the stripped xml string
      */
-    protected String stripOuterElement(String xml) {
+    public String stripOuterElement(String xml) {
         if (xml != null) {
             int start = xml.indexOf('>') + 1;
             int end = xml.lastIndexOf('<');
@@ -138,10 +170,13 @@ public class Interface_Client {
     protected String send(HttpURLConnection connection, Map<String, String> paramsMap,
                           boolean stripOuterXML) throws IOException {
 
-// encode data and send query
+
+
+
+        // encode data and send query
         sendData(connection, encodeData(paramsMap)) ;
 
-//retrieve reply
+        //retrieve reply
         String result = getReply(connection.getInputStream());
         connection.disconnect();
 
@@ -158,14 +193,18 @@ public class Interface_Client {
      * @throws IOException when there's some kind of communication problem
      */
     protected HttpURLConnection initPostConnection(String urlStr) throws IOException {
+
+
+
         URL url = new URL(urlStr);
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+
         connection.setDoOutput(true);
         connection.setRequestProperty("Accept-Charset", "UTF-8");
         connection.setReadTimeout(READ_TIMEOUT);
 
-// required to ensure the connection is not reused. When not set, spurious
-// intermittent problems (double posts, missing posts) occur under heavy load.
+        // required to ensure the connection is not reused. When not set, spurious
+        // intermittent problems (double posts, missing posts) occur under heavy load.
         connection.setRequestProperty("Connection", "close");
         return connection ;
     }
@@ -185,6 +224,10 @@ public class Interface_Client {
 
     /*******************************************************************************/
 
+    private final Logger logger= LoggerFactory.getLogger(Interface_Client.class);
+    // PRIVATE METHODS //
+
+
     class RequestForwader {
 
         final CloseableHttpClient client = HttpClients.createDefault();
@@ -200,17 +243,72 @@ public class Interface_Client {
 
             UrlEncodedFormEntity entity = new UrlEncodedFormEntity(parameterMap, "UTF-8");
 
-                httpPost.setEntity(entity);
-                HttpContext httpContext = new BasicHttpContext();
-                CloseableHttpResponse response;
-                response = client.execute(httpPost, httpContext);
-                result = EntityUtils.toString(response.getEntity());
+            httpPost.setEntity(entity);
+            HttpContext httpContext = new BasicHttpContext();
+            CloseableHttpResponse response;
+            response = client.execute(httpPost, httpContext);
+            result = EntityUtils.toString(response.getEntity());
 
             return result;
+        }
+
+        CloseableHttpAsyncClient httpAsyncClient= HttpAsyncClients.createDefault();
+
+        public RequestForwader(){
+            httpAsyncClient.start();
+        }
+
+        public void asyncForwardRequest(String uri, List<NameValuePair> parameterMap){
+
+
+
+            try {
+
+                if (!uri.startsWith("http")) {
+                    uri = "http://" + uri;
+                }
+                final HttpPost httpPost = new HttpPost(uri);
+
+                UrlEncodedFormEntity entity = new UrlEncodedFormEntity(parameterMap, "UTF-8");
+
+                httpPost.setEntity(entity);
+
+                httpAsyncClient.execute(httpPost, null);
+
+
+            } catch (UnsupportedEncodingException e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        public void asyncForwardRequestWithCallback(String uri, List<NameValuePair> parameterMap, FutureCallback<HttpResponse> c){
+
+
+
+            try {
+
+                if (!uri.startsWith("http")) {
+                    uri = "http://" + uri;
+                }
+                final HttpPost httpPost = new HttpPost(uri);
+
+                UrlEncodedFormEntity entity = new UrlEncodedFormEntity(parameterMap, "UTF-8");
+
+                httpPost.setEntity(entity);
+
+                httpAsyncClient.execute(httpPost, c);
+
+
+            } catch (UnsupportedEncodingException e) {
+                throw new RuntimeException(e);
+            }
         }
     }
 
     private final RequestForwader client=new RequestForwader();
+
+
+
 // PRIVATE METHODS //
 
     /**
@@ -224,7 +322,26 @@ public class Interface_Client {
     private String send(String urlStr, Map<String, String> paramsMap, boolean post)
             throws IOException {
 
+        String p = "http://(.*):";
+        Pattern pattern=Pattern.compile(p);
 
+        Matcher matcher=pattern.matcher(urlStr);
+
+
+        String host=null;
+        while (matcher.find()){
+            host=matcher.group(1);
+        }
+
+        if(!Character.isDigit(host.charAt(0))) {
+            InetAddress address = InetAddress.getByName(host);
+
+            String a = address.toString();
+
+            a = a.substring(a.indexOf('/' )+ 1);
+
+            urlStr=urlStr.replace(host,a);
+        }
         List<NameValuePair> list=new ArrayList<NameValuePair>();
         for(String key:paramsMap.keySet()){
 
@@ -241,6 +358,77 @@ public class Interface_Client {
         }
 
     }
+
+    private void asyncSend(String urlStr, Map<String, String> paramsMap, boolean post)
+            throws IOException {
+
+        String p = "http://(.*):";
+        Pattern pattern=Pattern.compile(p);
+
+        Matcher matcher=pattern.matcher(urlStr);
+
+
+        String host=null;
+        while (matcher.find()){
+            host=matcher.group(1);
+        }
+
+        if(!Character.isDigit(host.charAt(0))) {
+            InetAddress address = InetAddress.getByName(host);
+
+            String a = address.toString();
+
+            a = a.substring(a.indexOf('/' )+ 1);
+
+            urlStr=urlStr.replace(host,a);
+        }
+        List<NameValuePair> list=new ArrayList<NameValuePair>();
+        for(String key:paramsMap.keySet()){
+
+            BasicNameValuePair pair=new BasicNameValuePair(key,paramsMap.get(key));
+            list.add(pair);
+        }
+
+        client.asyncForwardRequest(urlStr,list);
+
+
+    }
+
+    private void asyncSendWithCallback(String urlStr, Map<String, String> paramsMap, boolean post,FutureCallback<HttpResponse>callback)
+            throws IOException {
+
+        String p = "http://(.*):";
+        Pattern pattern=Pattern.compile(p);
+
+        Matcher matcher=pattern.matcher(urlStr);
+
+
+        String host=null;
+        while (matcher.find()){
+            host=matcher.group(1);
+        }
+
+        if(!Character.isDigit(host.charAt(0))) {
+            InetAddress address = InetAddress.getByName(host);
+
+            String a = address.toString();
+
+            a = a.substring(a.indexOf('/' )+ 1);
+
+            urlStr=urlStr.replace(host,a);
+        }
+        List<NameValuePair> list=new ArrayList<NameValuePair>();
+        for(String key:paramsMap.keySet()){
+
+            BasicNameValuePair pair=new BasicNameValuePair(key,paramsMap.get(key));
+            list.add(pair);
+        }
+
+        client.asyncForwardRequestWithCallback(urlStr,list,callback);
+
+
+    }
+
 
 
     /**
